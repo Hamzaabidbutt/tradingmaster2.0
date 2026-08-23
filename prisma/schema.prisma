@@ -1,0 +1,247 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+// MongoDB (Atlas). The connector requires a replica set, which every Atlas
+// cluster provides; a standalone mongod will not work.
+//
+// Two consequences worth knowing before editing this file:
+//   * There are no migrations. Schema changes ship via `npm run db:push`,
+//     never `prisma migrate` — the migrate engine has no MongoDB support.
+//   * Referential actions (onDelete below) are *emulated by Prisma*, not
+//     enforced by the database. Deleting rows outside Prisma will leave
+//     orphans that the client would have cleaned up.
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  ANALYST
+  VIEWER
+}
+
+enum SignalSide {
+  BUY
+  SELL
+}
+
+enum SignalStatus {
+  ACTIVE
+  TP1_HIT
+  TP2_HIT
+  TP3_HIT
+  STOPPED
+  EXPIRED
+  CANCELLED
+}
+
+/// Which module produced a signal. COMPOSITE is the weighted 28-strategy
+/// ensemble; CONFLUENCE is the three independent chart analysts agreeing.
+enum SignalSource {
+  COMPOSITE
+  CONFLUENCE
+}
+
+// Every `id` below is a cuid mapped onto Mongo's mandatory `_id` rather than a
+// native ObjectId. That keeps the ids identical in shape to the ones the app
+// already generates and stores in signal payloads, so nothing downstream has
+// to learn a second id format.
+
+model User {
+  id          String        @id @default(cuid()) @map("_id")
+  email       String        @unique
+  password    String
+  name        String?
+  role        Role          @default(VIEWER)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  preferences UserPreference[]
+  alerts      AlertChannel[]
+  auditLogs   AuditLog[]
+}
+
+model UserPreference {
+  id        String   @id @default(cuid()) @map("_id")
+  userId    String
+  key       String
+  value     Json
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, key])
+  @@index([userId])
+}
+
+model Signal {
+  id               String       @id @default(cuid()) @map("_id")
+  symbol           String
+  timeframe        String
+  side             SignalSide
+  entry            Float
+  stopLoss         Float
+  tp1              Float
+  tp2              Float
+  tp3              Float
+  riskReward       Float
+  confidence       Float
+  confidenceLabel  String
+  expectedMovePct  Float
+  estHoldingMin    Int
+  reasoning        Json
+  invalidation     Json
+  strategyScores   Json
+  marketSnapshot   Json
+  status           SignalStatus @default(ACTIVE)
+  /// Most recent live price observed by the worker. Nullable for legacy rows.
+  currentPrice     Float?
+  /// Current and maximum progress from entry to TP1, measured identically for long and short signals.
+  currentTargetProgressPct Float?
+  maxTargetProgressPct     Float?
+  /// Set once when TP1 is first reached, even if the remaining position later stops out.
+  tp1CompletedAt   DateTime?
+  lastCheckedAt    DateTime?
+  resultPnlPct     Float?
+  closedPrice      Float?
+  closedAt         DateTime?
+  createdAt        DateTime     @default(now())
+
+  // --- Attribution & outcome (all nullable on purpose) ---
+  //
+  // Prisma's MongoDB connector raises "Inconsistent query result: Field ...
+  // is required to return data, got `null` instead" when a stored document
+  // simply lacks a required field, and `@default` is NOT backfilled on read.
+  // Signals written before this migration have none of these keys, so making
+  // any of them required would break every read of the existing collection.
+  //
+  /// null on signals written before attribution existed — read as COMPOSITE.
+  source           SignalSource?
+  /// AnalystVerdict[] — what each independent analyst said at signal time.
+  /// This is what makes per-analyst win rates measurable rather than assumed.
+  analystVerdicts  Json?
+  /// The full ConfluenceSetup, when source = CONFLUENCE.
+  confluence       Json?
+  /// Machine-readable outcome class, set when the signal closes:
+  /// false_breakout | failed_rejection | range_invalidation | ...
+  outcomeReason    String?
+  /// OutcomeAnalysis — excursion, who was right, biggest contributor.
+  outcomeAnalysis  Json?
+
+  learning         LearningRecord[]
+
+  @@index([symbol, timeframe])
+  @@index([status])
+  @@index([createdAt])
+  @@index([source, status])
+  @@index([side, status])
+}
+
+/// Latest confluence verdict per symbol+timeframe.
+///
+/// Upserted rather than appended, so the collection stays bounded at roughly
+/// (universe × timeframes) rows instead of growing without limit — the worker
+/// rewrites the same row every time it revisits a symbol.
+model ScanResult {
+  id          String   @id @default(cuid()) @map("_id")
+  symbol      String
+  timeframe   String
+  /// LONG | SHORT | NO_TRADE
+  decision    String
+  confidence  Float
+  price       Float
+  /// 24h quote volume at scan time — the ranking key for "best setups".
+  quoteVolume Float
+  /// 24h price change at scan time. Nullable: rows written before this field
+  /// existed have no value, and the dashboard prints "—" rather than +0.00%,
+  /// which would read as "flat" instead of "unknown".
+  priceChangePct Float?
+  /// The full ConfluenceSetup so the dashboard can render supporting analysis
+  /// without re-running the engines.
+  setup       Json
+  scannedAt   DateTime @default(now())
+
+  @@unique([symbol, timeframe])
+  @@index([timeframe, decision, confidence])
+  @@index([scannedAt])
+}
+
+model StrategyConfig {
+  id          String   @id @default(cuid()) @map("_id")
+  key         String   @unique
+  name        String
+  // Was @db.Text under MySQL. MongoDB strings are unbounded, so the
+  // annotation is both unnecessary and rejected by this connector.
+  description String
+  enabled     Boolean  @default(true)
+  weight      Float    @default(1.0)
+  totalTrades Int      @default(0)
+  wins        Int      @default(0)
+  losses      Int      @default(0)
+  sumRR       Float    @default(0)
+  updatedAt   DateTime @updatedAt
+}
+
+model Backtest {
+  id          String   @id @default(cuid()) @map("_id")
+  symbol      String
+  timeframe   String
+  strategyKey String
+  params      Json
+  metrics     Json
+  trades      Json
+  createdAt   DateTime @default(now())
+
+  @@index([symbol, timeframe])
+  @@index([strategyKey])
+}
+
+model MarketSnapshot {
+  id        String   @id @default(cuid()) @map("_id")
+  symbol    String
+  timeframe String
+  price     Float
+  data      Json
+  createdAt DateTime @default(now())
+
+  @@index([symbol, timeframe, createdAt])
+}
+
+model LearningRecord {
+  id           String   @id @default(cuid()) @map("_id")
+  signalId     String
+  features     Json
+  outcome      String
+  pnlPct       Float
+  analysis     Json
+  adjustments  Json
+  createdAt    DateTime @default(now())
+  signal       Signal   @relation(fields: [signalId], references: [id])
+
+  @@index([signalId])
+  @@index([createdAt])
+}
+
+model AlertChannel {
+  id        String   @id @default(cuid()) @map("_id")
+  userId    String
+  type      String
+  config    Json
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid()) @map("_id")
+  userId    String?
+  action    String
+  meta      Json
+  createdAt DateTime @default(now())
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([createdAt])
+}
