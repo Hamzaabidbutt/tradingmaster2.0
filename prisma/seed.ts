@@ -2,6 +2,7 @@
  * Seeds strategy configurations. Idempotent — safe to run repeatedly.
  *   npm run db:seed
  */
+import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
 import { STRATEGIES } from "../src/engines/strategies";
 
