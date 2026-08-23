@@ -1,21 +1,31 @@
 services:
-  mysql:
-    image: mysql:8.4
+  mongo:
+    image: mongo:7
     restart: unless-stopped
-    environment:
-      MYSQL_DATABASE: tradingmaster
-      MYSQL_USER: trading
-      MYSQL_PASSWORD: trading
-      MYSQL_ROOT_PASSWORD: rootpassword
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
     ports:
-      - "3306:3306"
+      - "27017:27017"
     volumes:
-      - mysql-data:/var/lib/mysql
+      - mongo-data:/data/db
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-ptrading"]
+      test: ["CMD-SHELL", "mongosh --quiet --eval 'db.adminCommand({ ping: 1 }).ok'"]
       interval: 5s
       timeout: 5s
       retries: 20
+
+  mongo-init:
+    image: mongo:7
+    restart: "no"
+    command:
+      - mongosh
+      - --host
+      - mongo:27017
+      - --quiet
+      - --eval
+      - "try { rs.status() } catch (error) { rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'mongo:27017' }] }) }"
+    depends_on:
+      mongo:
+        condition: service_healthy
 
   migrate:
     build:
@@ -23,10 +33,10 @@ services:
       target: worker
     command: sh -c "npx prisma db push && npx tsx prisma/seed.ts"
     environment:
-      DATABASE_URL: mysql://trading:trading@mysql:3306/tradingmaster
+      DATABASE_URL: mongodb://mongo:27017/tradingmaster?replicaSet=rs0
     depends_on:
-      mysql:
-        condition: service_healthy
+      mongo-init:
+        condition: service_completed_successfully
 
   web:
     build:
@@ -36,12 +46,10 @@ services:
     ports:
       - "3000:3000"
     environment:
-      DATABASE_URL: mysql://trading:trading@mysql:3306/tradingmaster
+      DATABASE_URL: mongodb://mongo:27017/tradingmaster?replicaSet=rs0
       AUTH_SECRET: ${AUTH_SECRET:-please-change-me-in-production}
       SIGNAL_MIN_CONFIDENCE: "65"
     depends_on:
-      mysql:
-        condition: service_healthy
       migrate:
         condition: service_completed_successfully
 
@@ -51,14 +59,12 @@ services:
       target: worker
     restart: unless-stopped
     environment:
-      DATABASE_URL: mysql://trading:trading@mysql:3306/tradingmaster
+      DATABASE_URL: mongodb://mongo:27017/tradingmaster?replicaSet=rs0
       WORKER_INTERVAL_SEC: "60"
       SIGNAL_MIN_CONFIDENCE: "65"
     depends_on:
-      mysql:
-        condition: service_healthy
       migrate:
         condition: service_completed_successfully
 
 volumes:
-  mysql-data:
+  mongo-data:

@@ -8,7 +8,7 @@ next move, then generates complete trade setups (entry / stop / TP1-3 / RR / con
 full evidence stack behind every call. It is **not** an indicator site: every signal explains *why*
 it exists.
 
-Built with **Next.js 14 (App Router) + TypeScript + MySQL (Prisma) + Tailwind + lightweight-charts**.
+Built with **Next.js 14 (App Router) + TypeScript + MongoDB (Prisma) + Tailwind + lightweight-charts**.
 
 ---
 
@@ -59,11 +59,11 @@ src/
   stores/           Zustand UI state (persisted)
 scripts/worker.ts   Background scanner: analyzes all markets, persists signals,
                     evaluates open trades, feeds the learning engine
-prisma/             MySQL schema + seed
+prisma/             MongoDB schema + seed
 tests/              Vitest unit/integration tests for the engines
 ```
 
-**Data flow:** Binance REST (klines/ticker/depth) → analysis engines → API/worker → MySQL.
+**Data flow:** Binance REST (klines/ticker/depth) → analysis engines → API/worker → MongoDB.
 Browser additionally connects straight to Binance websockets (`kline`, `markPrice`, `forceOrder`)
 for zero-latency chart ticks and the live liquidation tape.
 
@@ -74,13 +74,13 @@ for zero-latency chart ticks and the live liquidation tape.
 ```bash
 cp .env.example .env          # set AUTH_SECRET at minimum
 docker compose up --build
-# → web on http://localhost:3000, MySQL, migrations+seed, background worker
+# → web on http://localhost:3000, MongoDB replica set, schema push+seed, background worker
 ```
 
 ### Local development
 
 ```bash
-cp .env.example .env          # point DATABASE_URL at your MySQL, set AUTH_SECRET
+cp .env.example .env          # point DATABASE_URL at your MongoDB replica set, set AUTH_SECRET
 npm install                   # runs prisma generate
 npx prisma db push && npm run db:seed
 npm run dev                   # web  → http://localhost:3000
@@ -88,7 +88,7 @@ npm run worker                # background signal scanner (separate terminal)
 npm test                      # engine test suite
 ```
 
-The dashboard works without a database (analysis is computed live); MySQL enables signal
+The dashboard works without a database (analysis is computed live); MongoDB enables signal
 persistence, learning, analytics and auth. The first registered account becomes **ADMIN**.
 
 > **Binance geo-blocking (important for cloud deploys).** Binance returns HTTP **451** to a number of

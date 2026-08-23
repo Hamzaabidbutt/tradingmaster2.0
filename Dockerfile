@@ -14,7 +14,7 @@ FROM base AS builder
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 # DATABASE_URL is only needed at runtime; provide a placeholder for prisma generate.
-ENV DATABASE_URL="mysql://placeholder:placeholder@localhost:3306/placeholder"
+ENV DATABASE_URL="mongodb://placeholder:27017/tradingmaster?replicaSet=rs0"
 RUN npx prisma generate && npm run build
 
 # ---- Runtime (web) ----
