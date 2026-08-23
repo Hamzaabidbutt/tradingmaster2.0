@@ -21,7 +21,7 @@ jobs:
         run: npm ci
         env:
           # prisma generate (postinstall) does not need a live database
-          DATABASE_URL: "mysql://ci:ci@localhost:3306/ci"
+          DATABASE_URL: "mongodb://ci:27017/tradingmaster?replicaSet=rs0"
 
       - name: Unit & integration tests
         run: npm test
@@ -29,7 +29,7 @@ jobs:
       - name: Type-check & build
         run: npm run build
         env:
-          DATABASE_URL: "mysql://ci:ci@localhost:3306/ci"
+          DATABASE_URL: "mongodb://ci:27017/tradingmaster?replicaSet=rs0"
           AUTH_SECRET: "ci-only-secret"
 
   docker:
